@@ -1,0 +1,52 @@
+#!/bin/bash
+# Hook to automatically fix Huawei ESSX8336 ACPI ghost device on new kernels (Ubuntu 22.04 .ko and Ubuntu 24.04 .ko.zst)
+VER="$1"
+if [ -z "$VER" ]; then
+    VER=$(uname -r)
+fi
+
+MOD_DIR="/lib/modules/$VER/kernel/sound/soc/intel/common"
+KO="$MOD_DIR/snd-soc-acpi-intel-match.ko"
+KO_ZST="$MOD_DIR/snd-soc-acpi-intel-match.ko.zst"
+
+patch_ko_file() {
+    local target="$1"
+    python3 - "$target" << 'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, 'rb') as f:
+    d = f.read()
+if b'ESSX8336' in d:
+    d = d.replace(b'ESSX8336', b'XXXX8336')
+    with open(path, 'wb') as f:
+        f.write(d)
+    print(f"Patched ESSX8336 in {path}")
+    sys.exit(0)
+sys.exit(1)
+PYEOF
+}
+
+if [ -f "$KO_ZST" ] && command -v zstd >/dev/null 2>&1; then
+    TMP_KO=$(mktemp /tmp/snd-soc-acpi-intel-match.XXXXXX.ko)
+    zstd -d -f "$KO_ZST" -o "$TMP_KO" 2>/dev/null || true
+    if [ -s "$TMP_KO" ] && grep -q "ESSX8336" "$TMP_KO" 2>/dev/null; then
+        echo "Applying Huawei audio fix to $KO_ZST..."
+        cp -n "$KO_ZST" "$KO_ZST.bak" 2>/dev/null || true
+        if patch_ko_file "$TMP_KO"; then
+            strip -g "$TMP_KO" 2>/dev/null || true
+            zstd -z -f "$TMP_KO" -o "$KO_ZST" >/dev/null 2>&1
+            depmod -a "$VER" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$TMP_KO"
+elif [ -f "$KO" ]; then
+    if grep -q "ESSX8336" "$KO" 2>/dev/null; then
+        echo "Applying Huawei audio fix to $KO..."
+        cp -n "$KO" "$KO.bak" 2>/dev/null || true
+        if patch_ko_file "$KO"; then
+            strip -g "$KO" 2>/dev/null || true
+            depmod -a "$VER" 2>/dev/null || true
+        fi
+    fi
+fi
+exit 0
